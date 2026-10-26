@@ -6,9 +6,29 @@ frontend can render the available scans and validate targets consistently.
 from __future__ import annotations
 
 from .base import Scanner, TargetError
-from . import dns_subdomains, ssl_cert
+from . import (
+    api_endpoints,
+    directories,
+    dns_subdomains,
+    http_fingerprint,
+    ports,
+    ssl_cert,
+    waf,
+    wayback,
+    whois,
+)
 
-_MODULES = [ssl_cert, dns_subdomains]
+_MODULES = [
+    dns_subdomains,
+    ports,
+    http_fingerprint,
+    ssl_cert,
+    whois,
+    wayback,
+    directories,
+    api_endpoints,
+    waf,
+]
 
 REGISTRY: dict[str, Scanner] = {
     module.name: Scanner(
