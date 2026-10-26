@@ -1,0 +1,56 @@
+"""Scanner registry.
+
+Register each scanner module here. The API exposes the registry so the
+frontend can render the available scans and validate targets consistently.
+"""
+from __future__ import annotations
+
+from .base import Scanner, TargetError
+from . import (
+    api_endpoints,
+    directories,
+    dns_subdomains,
+    http_fingerprint,
+    ports,
+    ssl_cert,
+    waf,
+    wayback,
+    whois,
+)
+
+_MODULES = [
+    dns_subdomains,
+    ports,
+    http_fingerprint,
+    ssl_cert,
+    whois,
+    wayback,
+    directories,
+    api_endpoints,
+    waf,
+]
+
+REGISTRY: dict[str, Scanner] = {
+    module.name: Scanner(
+        name=module.name,
+        title=module.title,
+        description=module.description,
+        validate=module.validate,
+        run=module.run,
+    )
+    for module in _MODULES
+}
+
+
+def get(name: str) -> Scanner | None:
+    return REGISTRY.get(name)
+
+
+def catalog() -> list[dict[str, str]]:
+    return [
+        {"name": s.name, "title": s.title, "description": s.description}
+        for s in REGISTRY.values()
+    ]
+
+
+__all__ = ["REGISTRY", "get", "catalog", "Scanner", "TargetError"]

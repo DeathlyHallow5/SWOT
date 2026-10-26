@@ -1,0 +1,25 @@
+# api endpoints
+/api
+/api/v1
+/api/v2
+/api/v3
+/graphql
+/rest
+/wp-json
+/wp-json/wp/v2
+/wp-json/wp/v2/users
+/api/health
+/api/status
+/api/docs
+/swagger
+/swagger.json
+/openapi.json
+/api-docs
+/v1
+/v2
+/actuator
+/actuator/env
+/oauth/token
+/auth
+/auth/login
+/.well-known/openid-configuration

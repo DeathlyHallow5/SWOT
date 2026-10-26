@@ -1,24 +1,73 @@
-# SWOT 1.0
-Smart Website Osint Tool
+# SWOT 2.0 — Smart Website OSINT Tool
 
-only works on Linux: 
+A rewrite of the original single-file PHP tool into a **separated
+backend / frontend** architecture:
 
-Kali
-Ubuntu
-Parrot security os
+- **backend/** — a FastAPI service that runs each scan as a background *job*
+  and streams results live over **Server-Sent Events (SSE)**.
+- **frontend/** — a Next.js (TypeScript, App Router) UI that starts scans and
+  follows them in real time.
 
-components: nslookup, nmap, whatweb, custom sub domain list, custom directory list, wafw00f, custom api endpoint list, waybackurls
+This fork is maintained by [@DeathlyHallow5](https://github.com/DeathlyHallow5)
+with the original author's permission. Licensed under **GPL-3.0** (unchanged).
 
-how to start: 
+> ⚠️ **Authorized use only.** Reconnaissance tools must only be pointed at
+> systems you own or have explicit written permission to test.
 
-git clone https://github.com/VHJ5TmV0/SWOT.git
+## Architecture
 
-sudo su
+```
+POST /api/scans                   -> creates a job, returns job_id
+GET  /api/scans/{id}/events (SSE) -> live log + findings as they happen
+GET  /api/scans/{id}              -> full status + replay of all events
+POST /api/scans/{id}/cancel
+GET  /api/scanners                -> catalog of available scans
+```
 
-mv SWOT /var/www/html/
+Each scanner declares how its target is validated. Validation is the main
+security boundary and is covered by tests (`backend/tests/test_targets.py`):
 
-cd /var/www/html/SWOT
+- hostnames are matched against an RFC 1123 pattern (blocks shell injection);
+- IP targets must be public (private / loopback / reserved are rejected, an
+  SSRF guard);
+- URL targets must be `http`/`https` with a non-private host.
 
-service apache2 start
+## Scanners
 
-open in browser this adress http://127.0.0.1/SWOT
+| Name             | What it does                                  | Needs       |
+| ---------------- | --------------------------------------------- | ----------- |
+| `ssl_cert`       | Reads and summarises a host's TLS certificate | pure Python |
+| `dns_subdomains` | Resolves a wordlist of subdomains over DNS    | pure Python |
+
+More scanners (ports, WHOIS, HTTP fingerprinting, Wayback) are ported from the
+original onto the same job/SSE contract.
+
+## Running locally
+
+### Backend
+
+```bash
+cd backend
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt       # Windows
+# source .venv/bin/activate && pip install -r requirements.txt  # Linux/macOS
+.venv/Scripts/python -m uvicorn app.main:app --port 8000
+```
+
+Run the tests:
+
+```bash
+cd backend
+.venv/Scripts/python -m pytest -q
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev   # http://localhost:3000
+```
+
+The frontend reads the API base URL from `NEXT_PUBLIC_API_BASE`
+(default `http://localhost:8000`), set in `frontend/.env.local`.
