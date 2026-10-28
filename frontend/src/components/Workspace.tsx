@@ -432,7 +432,7 @@ export default function Workspace() {
                     {!scanners.length && (
                       <option value="dns_subdomains">Loading scanners…</option>
                     )}
-                    {["workflow", "builtin", "external"].map((category) => (
+                    {["workflow", "builtin", "intel", "external"].map((category) => (
                       <optgroup
                         key={category}
                         label={
@@ -440,7 +440,9 @@ export default function Workspace() {
                             ? "Workflows"
                             : category === "builtin"
                               ? "Built-in scanners"
-                              : "External engines"
+                              : category === "intel"
+                                ? "Intelligence (API)"
+                                : "External engines"
                         }
                       >
                         {scanners
@@ -908,14 +910,22 @@ export default function Workspace() {
                       Docs <IcExternal width={13} height={13} />
                     </a>
                   </div>
-                  <button
-                    className="btn btn-ghost"
-                    disabled={!tool.available || busy}
-                    onClick={() => choose(tool.name)}
-                  >
-                    Use {tool.title}
-                    <IcArrow width={14} height={14} />
-                  </button>
+                  {tool.name.startsWith("provider:") ? (
+                    <span className="tiny muted">
+                      {tool.available
+                        ? "Key configured · used by intel scanners"
+                        : "Add an API key to enable intel scanners"}
+                    </span>
+                  ) : (
+                    <button
+                      className="btn btn-ghost"
+                      disabled={!tool.available || busy}
+                      onClick={() => choose(tool.name)}
+                    >
+                      Use {tool.title}
+                      <IcArrow width={14} height={14} />
+                    </button>
+                  )}
                 </article>
               ))}
             </div>

@@ -14,6 +14,7 @@ from . import scanners, tools
 from .config import settings
 from .jobs import manager
 from .scanners._scope import in_scope, public_target
+from .scanners._intel import provider_catalog
 
 
 @asynccontextmanager
@@ -40,7 +41,8 @@ async def health() -> dict:
 
 @app.get("/api/tools")
 async def list_tools() -> list[dict]:
-    return await tools.catalog()
+    # CLI engines, the optional ZAP worker, then optional intel providers.
+    return [*await tools.catalog(), *provider_catalog()]
 
 
 @app.get("/api/scanners")

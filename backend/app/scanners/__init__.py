@@ -1,12 +1,19 @@
 """Scanner catalog shared by the API, dashboard and Docker installation."""
 from __future__ import annotations
 from .base import Scanner, TargetError
-from . import api_endpoints, directories, dns_subdomains, http_fingerprint, ports, ssl_cert, waf, wayback, whois, zap
+from . import (api_endpoints, directories, dns_subdomains, http_fingerprint, ports, ssl_cert, waf, wayback, whois, zap,
+               tech_stack, admin_finder, subdomain_takeover, real_ip, dork_search, secret_search, stealer_check, db_leak)
 from .external import EXTERNAL, WORKFLOW
 from ..tools import executable
 
-_MODULES = [dns_subdomains, ports, http_fingerprint, ssl_cert, whois, wayback, directories, api_endpoints, waf]
-REGISTRY: dict[str, Scanner] = {module.name: Scanner(module.name, module.title, module.description, module.validate, module.run) for module in _MODULES}
+# Pure-Python scanners that connect to the target (or its subdomains).
+_BUILTIN = [dns_subdomains, ports, http_fingerprint, ssl_cert, whois, wayback,
+            directories, api_endpoints, waf, tech_stack, admin_finder, subdomain_takeover]
+# Intelligence scanners: query third-party sources, optionally with API keys.
+_INTEL = [real_ip, dork_search, secret_search, stealer_check, db_leak]
+
+REGISTRY: dict[str, Scanner] = {m.name: Scanner(m.name, m.title, m.description, m.validate, m.run) for m in _BUILTIN}
+REGISTRY.update({m.name: Scanner(m.name, m.title, m.description, m.validate, m.run, "intel") for m in _INTEL})
 REGISTRY.update({scanner.name: scanner for scanner in [WORKFLOW, *EXTERNAL]})
 REGISTRY["zap"] = Scanner(zap.name, zap.title, zap.description, zap.validate, zap.run, "external", ("zap",))
 

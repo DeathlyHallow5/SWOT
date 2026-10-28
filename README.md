@@ -97,6 +97,14 @@ process-local. `SWOT_MAX_JOBS` controls concurrency within that worker.
 | WHOIS, Wayback | Registration information and archived URLs |
 | Directories, API endpoints | Wordlist-based HTTP path discovery |
 | WAF | Header and response signatures |
+| Technology stack | Server, framework, CMS and JS library/version detection from headers, cookies, markers and asset URLs |
+| Admin panel finder | Wordlist-based discovery of administrative/login panels |
+| Subdomain takeover | Dangling-CNAME detection against third-party service fingerprints (detection only) |
+| Real IP discovery | Candidate origin IPs via Certificate Transparency and CDN-range filtering; optional Shodan/SecurityTrails |
+| Dork search | Generates Google/GitHub/Shodan dork URLs; optionally runs them via the Google Programmable Search API |
+| Secret exposure | Scans the site's JavaScript for secret patterns; optional GitHub code search |
+| Stealer-log exposure | Defensive leak check via LeakCheck / Intelligence X (API key required) |
+| Database leak check | Known breaches from the public HIBP catalogue; optional domain-account lookup with a key |
 | Subfinder | Passive subdomain enumeration; source coverage depends on provider availability/keys |
 | dnsx | A, AAAA and CNAME records |
 | httpx | HTTP status, page title, server and technology detection |
@@ -106,6 +114,15 @@ process-local. `SWOT_MAX_JOBS` controls concurrency within that worker.
 | tlsx | TLS and certificate metadata |
 | Domain discovery | Subfinder → dnsx → httpx; first 100 discovered hosts by default |
 | ZAP baseline | Optional bounded crawl plus passive response analysis; no active attack scan |
+
+The intelligence scanners (real IP, dork search, secret exposure, stealer-log
+exposure, database leak) are **key-ready**: they run without credentials and
+degrade to a clear "token required" result, and use an optional third-party
+provider when its key is set via the `SWOT_*` variables in `.env.example`
+(listed under **Tools & engines** as providers). Only official/passive APIs are
+used — no HTML scraping and no CAPTCHA handling. Use them only against targets
+you are authorized to assess; stealer-log and breach checks are for reviewing
+your own exposure.
 
 Nuclei does **not** run the entire community CVE collection by default. The
 bundled templates live in `backend/app/templates`, are validated against the

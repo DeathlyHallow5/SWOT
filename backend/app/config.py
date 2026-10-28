@@ -32,5 +32,19 @@ class Settings:
     allowed_domains: list[str] = field(default_factory=lambda: _csv("SWOT_ALLOWED_DOMAINS", ""))
     zap_url: str = os.getenv("SWOT_ZAP_URL", "")
 
+    # Optional third-party intelligence credentials. Each is empty by default;
+    # the matching scanner degrades to a clear "token required" result without
+    # it. Keys are read from the environment and never logged or returned.
+    github_token: str = os.getenv("SWOT_GITHUB_TOKEN", "")
+    shodan_key: str = os.getenv("SWOT_SHODAN_KEY", "")
+    securitytrails_key: str = os.getenv("SWOT_SECURITYTRAILS_KEY", "")
+    hibp_key: str = os.getenv("SWOT_HIBP_KEY", "")
+    leakcheck_key: str = os.getenv("SWOT_LEAKCHECK_KEY", "")
+    intelx_key: str = os.getenv("SWOT_INTELX_KEY", "")
+    google_api_key: str = os.getenv("SWOT_GOOGLE_API_KEY", "")
+    google_cse_id: str = os.getenv("SWOT_GOOGLE_CSE_ID", "")
+    # Per-scanner cap on intel HTTP lookups, to stay within free-tier limits.
+    max_intel_lookups: int = int(os.getenv("SWOT_MAX_INTEL_LOOKUPS", "60"))
+
 
 settings = Settings()
