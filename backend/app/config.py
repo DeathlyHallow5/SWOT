@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 def _csv(name: str, default: str) -> list[str]:
@@ -21,7 +22,38 @@ class Settings:
     # Hard cap on concurrent running jobs, to bound resource use.
     max_concurrent_jobs: int = int(os.getenv("SWOT_MAX_JOBS", "4"))
     # Per-scan wall-clock limit, in seconds.
-    scan_timeout_seconds: int = int(os.getenv("SWOT_SCAN_TIMEOUT", "120"))
+    scan_timeout_seconds: int = int(os.getenv("SWOT_SCAN_TIMEOUT", "300"))
+    max_queued_jobs: int = int(os.getenv("SWOT_MAX_QUEUED_JOBS", "32"))
+    database_path: str = os.getenv("SWOT_DATABASE", str(Path(__file__).resolve().parents[1] / "data/swot.db"))
+    tools_dir: str = os.getenv("SWOT_TOOLS_DIR", str(Path(__file__).resolve().parents[2] / "tools/bin"))
+    tool_rate: int = max(1, min(100, int(os.getenv("SWOT_TOOL_RATE", "10"))))
+    max_tool_results: int = int(os.getenv("SWOT_MAX_TOOL_RESULTS", "1000"))
+    max_discovery_hosts: int = int(os.getenv("SWOT_MAX_DISCOVERY_HOSTS", "100"))
+    allowed_domains: list[str] = field(default_factory=lambda: _csv("SWOT_ALLOWED_DOMAINS", ""))
+    zap_url: str = os.getenv("SWOT_ZAP_URL", "")
+
+    # Optional third-party intelligence credentials. Each is empty by default;
+    # the matching scanner degrades to a clear "token required" result without
+    # it. Keys are read from the environment and never logged or returned.
+    github_token: str = os.getenv("SWOT_GITHUB_TOKEN", "")
+    shodan_key: str = os.getenv("SWOT_SHODAN_KEY", "")
+    securitytrails_key: str = os.getenv("SWOT_SECURITYTRAILS_KEY", "")
+    hibp_key: str = os.getenv("SWOT_HIBP_KEY", "")
+    leakcheck_key: str = os.getenv("SWOT_LEAKCHECK_KEY", "")
+    intelx_key: str = os.getenv("SWOT_INTELX_KEY", "")
+    google_api_key: str = os.getenv("SWOT_GOOGLE_API_KEY", "")
+    google_cse_id: str = os.getenv("SWOT_GOOGLE_CSE_ID", "")
+    # Per-scanner cap on intel HTTP lookups, to stay within free-tier limits.
+    max_intel_lookups: int = int(os.getenv("SWOT_MAX_INTEL_LOOKUPS", "60"))
+
+    # Nuclei template sources. "bundled" (the reviewed templates shipped in
+    # backend/app/templates) is always available; the official set and any
+    # user presets are optional and selected per scan.
+    nuclei_templates_dir: str = os.getenv("SWOT_NUCLEI_TEMPLATES", str(Path(__file__).resolve().parents[2] / "tools/nuclei-templates"))
+    nuclei_presets_dir: str = os.getenv("SWOT_NUCLEI_PRESETS", str(Path(__file__).resolve().parents[1] / "data/nuclei-presets"))
+    # DoS templates can disrupt a target; excluded from every profile unless
+    # explicitly allowed here.
+    nuclei_allow_dos: bool = os.getenv("SWOT_NUCLEI_ALLOW_DOS", "").lower() in ("1", "true", "yes")
 
 
 settings = Settings()

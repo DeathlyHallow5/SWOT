@@ -6,13 +6,16 @@ def test_all_scanners_registered() -> None:
     expected = {
         "dns_subdomains", "ports", "http_fingerprint", "ssl_cert",
         "whois", "wayback", "directories", "api_endpoints", "waf",
+        "tech_stack", "admin_finder", "subdomain_takeover",
+        "real_ip", "dork_search", "secret_search", "stealer_check", "db_leak",
+        "discovery", "subfinder", "dnsx", "httpx", "katana", "nuclei", "naabu", "tlsx", "zap",
     }
     assert expected == set(scanners.REGISTRY)
 
 
 def test_catalog_shape() -> None:
     for entry in scanners.catalog():
-        assert {"name", "title", "description"} == set(entry)
+        assert {"name", "title", "description", "category", "requires", "available"} == set(entry)
         assert entry["title"] and entry["description"]
 
 

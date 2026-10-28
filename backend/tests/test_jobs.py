@@ -2,10 +2,17 @@
 import asyncio
 
 import pytest
+import pytest_asyncio
 
 from app.jobs import JobStatus, manager
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def cleanup_jobs():
+    yield
+    await manager.shutdown()
 
 
 async def _ok_runner(job) -> None:
