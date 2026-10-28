@@ -1,0 +1,7 @@
+.env
+/tools/bin/
+/backend/data/
+/work/
+/outputs/
+__pycache__/
+*.pyc

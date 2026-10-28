@@ -75,10 +75,16 @@ def validate_http_url(target: str) -> str:
     raw = target.strip()
     if "://" not in raw:
         raw = "https://" + raw
-    parsed = urlparse(raw)
+    try:
+        parsed = urlparse(raw)
+        parsed.port
+    except ValueError as exc:
+        raise TargetError("invalid URL or port") from exc
     if parsed.scheme not in ("http", "https"):
         raise TargetError("only http and https URLs are allowed")
     host = parsed.hostname or ""
+    if parsed.username is not None or parsed.password is not None:
+        raise TargetError("URLs containing credentials are not allowed")
     validate_host_or_ip(host)  # reuse the SSRF/hostname guard
     return parsed.geturl()
 
@@ -90,6 +96,8 @@ class Scanner:
     description: str
     validate: Callable[[str], str]
     run: ScannerRunner
+    category: str = "builtin"
+    requires: tuple[str, ...] = ()
 
 
 class ScannerSpec(Protocol):

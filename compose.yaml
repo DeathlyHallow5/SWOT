@@ -1,0 +1,59 @@
+name: swot
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SWOT_API_PORT:-8000}:8000"
+    environment:
+      SWOT_DATABASE: /data/swot.db
+      SWOT_CORS_ORIGINS: http://localhost:${SWOT_WEB_PORT:-3000},http://127.0.0.1:${SWOT_WEB_PORT:-3000}
+      SWOT_SCAN_TIMEOUT: ${SWOT_SCAN_TIMEOUT:-300}
+      SWOT_TOOL_RATE: ${SWOT_TOOL_RATE:-10}
+      SWOT_MAX_JOBS: ${SWOT_MAX_JOBS:-4}
+      SWOT_ALLOWED_DOMAINS: ${SWOT_ALLOWED_DOMAINS:-}
+      SWOT_ZAP_URL: http://zap:8090
+    volumes:
+      - scan-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+  frontend:
+    build:
+      context: ./frontend
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SWOT_WEB_PORT:-3000}:3000"
+    environment:
+      SWOT_API_INTERNAL_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+  zap:
+    profiles: [zap]
+    build:
+      context: ./docker/zap
+    init: true
+    restart: unless-stopped
+    environment:
+      ZAP_SCAN_TIMEOUT: "240"
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  scan-data:

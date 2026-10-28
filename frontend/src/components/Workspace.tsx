@@ -1,20 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  cancelScan,
-  fetchScanners,
-  startScan,
-  streamScan,
-  type ScanEvent,
-  type ScannerInfo,
-} from "@/lib/api";
-import {
-  shapeFor,
-  tilesFor,
-  toCsv,
-  type Column,
-} from "@/lib/findings";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Sidebar, { type View } from "./Sidebar";
 import {
   IcAlert,
   IcArrow,
@@ -22,397 +9,1132 @@ import {
   IcCheck,
   IcClock,
   IcDownload,
+  IcExternal,
   IcSearch,
   IcShield,
-  IcExternal,
+  IcSettings,
 } from "./icons";
+import {
+  cancelScan,
+  fetchHealth,
+  fetchHistory,
+  fetchScan,
+  fetchScanners,
+  fetchTools,
+  startScan,
+  streamScan,
+  type RunState,
+  type ScanDetail,
+  type ScanEvent,
+  type ScannerInfo,
+  type ScanSummary,
+  type ToolInfo,
+} from "@/lib/api";
+import {
+  display,
+  download,
+  shapeFor,
+  summary,
+  tilesFor,
+  toCsv,
+} from "@/lib/findings";
 
-type RunState = "idle" | "running" | "done" | "error" | "cancelled";
-
-function hhmmss(epoch: number): string {
-  return new Date(epoch * 1000).toLocaleTimeString("en-GB", { hour12: false });
-}
-
-function statusClass(value: unknown): string {
-  if (value === "open") return "s-2";
-  const n = Number(value);
-  if (n >= 200 && n < 300) return "s-2";
-  if (n >= 300 && n < 400) return "s-3";
-  return "s-4";
-}
+const headings: Record<View, [string, string]> = {
+  scans: [
+    "Scan workspace",
+    "Discover and inspect your external attack surface.",
+  ],
+  overview: [
+    "Workspace overview",
+    "Your investigations, findings and tools in one place.",
+  ],
+  history: ["Scan history", "Revisit results and export your investigations."],
+  tools: [
+    "Tools & engines",
+    "Purpose-built scanners. One connected workspace.",
+  ],
+};
+const isActive = (status?: string) =>
+  status === "running" || status === "queued";
+const date = (at: number) =>
+  new Date(at * 1000).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
 export default function Workspace() {
+  const [view, setView] = useState<View>("scans");
   const [scanners, setScanners] = useState<ScannerInfo[]>([]);
-  const [scanner, setScanner] = useState("");
+  const [tools, setTools] = useState<ToolInfo[]>([]);
+  const [history, setHistory] = useState<ScanSummary[]>([]);
+  const [scanner, setScanner] = useState("dns_subdomains");
   const [target, setTarget] = useState("");
-  const [state, setState] = useState<RunState>("idle");
-  const [events, setEvents] = useState<ScanEvent[]>([]);
+  const [job, setJob] = useState<ScanDetail | null>(null);
+  const [online, setOnline] = useState<boolean | null>(null);
+  const [connected, setConnected] = useState(true);
+  const [pending, setPending] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [ran, setRan] = useState<{ scanner: string; target: string } | null>(null);
-  const [startedAt, setStartedAt] = useState(0);
-  const [finishedAt, setFinishedAt] = useState(0);
   const [query, setQuery] = useState("");
-  const jobRef = useRef<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [tab, setTab] = useState("findings");
+  const [selected, setSelected] = useState<ScanEvent | null>(null);
+  const [now, setNow] = useState(0);
   const stopRef = useRef<(() => void) | null>(null);
+  const generation = useRef(0);
+  const catalogLoaded = useRef(false);
+  const busy = pending || isActive(job?.status);
 
-  useEffect(() => {
-    fetchScanners()
-      .then((list) => {
-        setScanners(list);
-        if (list[0]) setScanner(list[0].name);
-      })
-      .catch((e: Error) => setMessage(e.message));
-    return () => stopRef.current?.();
+  const refresh = useCallback(async () => {
+    const [catalog, runs, engines] = await Promise.all([
+      fetchScanners(),
+      fetchHistory(),
+      fetchTools(),
+    ]);
+    setScanners(catalog);
+    setHistory(runs);
+    setTools(engines);
+    setOnline(true);
+    catalogLoaded.current = true;
   }, []);
 
-  const findings = useMemo(() => events.filter((e) => e.kind === "finding"), [events]);
-  const activity = useMemo(
-    () => events.filter((e) => e.kind !== "finding"),
-    [events],
-  );
-
-  const shape = ran ? shapeFor(ran.scanner) : null;
-  const tiles = ran ? tilesFor(ran.scanner, findings) : [];
-  const title = scanners.find((s) => s.name === scanner)?.title ?? "";
-
-  const filtered = useMemo(() => {
-    if (!query.trim()) return findings;
-    const q = query.toLowerCase();
-    return findings.filter((f) => JSON.stringify(f.data).toLowerCase().includes(q));
-  }, [findings, query]);
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!scanner || !target.trim() || state === "running") return;
-    setEvents([]);
-    setMessage(null);
-    setQuery("");
-    setState("running");
-    setRan({ scanner, target: target.trim() });
-    setStartedAt(Date.now() / 1000);
-    setFinishedAt(0);
-    try {
-      const { job_id } = await startScan(scanner, target.trim());
-      jobRef.current = job_id;
-      stopRef.current = streamScan(job_id, {
-        onEvent: (ev) => setEvents((prev) => [...prev, ev]),
-        onEnd: (status, error) => {
-          setState(status as RunState);
-          setFinishedAt(Date.now() / 1000);
-          if (error) setMessage(error);
+  const follow = useCallback(
+    (id: string) => {
+      stopRef.current?.();
+      const token = ++generation.current;
+      stopRef.current = streamScan(id, {
+        onEvent: (event) => {
+          if (generation.current !== token) return;
+          setJob((prev) => {
+            if (
+              !prev ||
+              prev.job_id !== id ||
+              prev.events.some((e) => e.seq === event.seq)
+            )
+              return prev;
+            const status =
+              event.kind === "status"
+                ? (event.data.status as RunState)
+                : prev.status;
+            return {
+              ...prev,
+              status,
+              finding_count:
+                prev.finding_count + (event.kind === "finding" ? 1 : 0),
+              finished_at:
+                event.kind === "status" && !isActive(status)
+                  ? event.at
+                  : prev.finished_at,
+              events: [...prev.events, event],
+            };
+          });
         },
-        onError: () => {
-          setState("error");
-          setMessage("lost connection to the scan stream");
+        onConnection: (value) => {
+          if (generation.current === token) setConnected(value);
+        },
+        onEnd: (status, error) => {
+          if (generation.current !== token) return;
+          setConnected(true);
+          setCancelling(false);
+          setJob((prev) =>
+            prev?.job_id === id
+              ? {
+                  ...prev,
+                  status,
+                  error,
+                  finished_at: prev.finished_at ?? Date.now() / 1000,
+                }
+              : prev,
+          );
+          if (error) setMessage(error);
+          refresh().catch(() => setOnline(false));
         },
       });
-    } catch (err) {
-      setState("error");
-      setMessage((err as Error).message);
+    },
+    [refresh],
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    Promise.all([fetchScanners(), fetchHistory(), fetchTools()])
+      .then(([catalog, runs, engines]) => {
+        if (disposed) return;
+        setScanners(catalog);
+        setHistory(runs);
+        setTools(engines);
+        setOnline(true);
+        catalogLoaded.current = true;
+      })
+      .catch((err: Error) => {
+        if (!disposed) {
+          setOnline(false);
+          setMessage(err.message);
+        }
+      });
+    const saved = localStorage.getItem("swot.lastScan");
+    if (saved && /^[a-f0-9]{32}$/.test(saved)) {
+      fetchScan(saved)
+        .then((detail) => {
+          if (disposed) return;
+          setJob(detail);
+          setTarget(detail.target);
+          setScanner(detail.scanner);
+          if (isActive(detail.status)) follow(detail.job_id);
+        })
+        .catch(() => localStorage.removeItem("swot.lastScan"));
+    }
+    const timer = setInterval(() => {
+      fetchHealth()
+        .then(() => {
+          setOnline(true);
+          if (!catalogLoaded.current) return refresh();
+        })
+        .catch(() => setOnline(false));
+    }, 15000);
+    return () => {
+      disposed = true;
+      stopRef.current?.();
+      clearInterval(timer);
+    };
+  }, [refresh, follow]);
+
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
+
+  const findings = useMemo(
+    () => job?.events.filter((e) => e.kind === "finding") ?? [],
+    [job],
+  );
+  const activity = useMemo(
+    () => job?.events.filter((e) => e.kind !== "finding").slice(-150) ?? [],
+    [job],
+  );
+  const technologies = useMemo(
+    () => [
+      ...new Set(
+        findings.flatMap((e) =>
+          Array.isArray(e.data.technologies)
+            ? e.data.technologies.map(String)
+            : [],
+        ),
+      ),
+    ],
+    [findings],
+  );
+  const filtered = useMemo(
+    () =>
+      findings.filter((e) => {
+        const matchesQuery = JSON.stringify(e.data)
+          .toLowerCase()
+          .includes(query.toLowerCase());
+        const code = Number(e.data.status);
+        const matchesStatus =
+          statusFilter === "all" ||
+          (statusFilter === "success" && code >= 200 && code < 400) ||
+          (statusFilter === "restricted" && [401, 403].includes(code)) ||
+          (statusFilter === "risk" &&
+            ["high", "critical"].includes(String(e.data.severity)));
+        return matchesQuery && matchesStatus;
+      }),
+    [findings, query, statusFilter],
+  );
+  const shape = shapeFor(job?.scanner ?? "dns_subdomains");
+  const tiles = job
+    ? tilesFor(job.scanner, findings)
+    : [
+        { num: "—", label: "Hosts found" },
+        { num: "—", label: "Web responses" },
+        { num: "—", label: "Technologies" },
+      ];
+  const selectedScanner = scanners.find((s) => s.name === scanner);
+  const progress = job?.events.findLast((e) => e.kind === "progress");
+  const elapsed = job
+    ? Math.max(
+        0,
+        Math.round(
+          (job.finished_at ?? (now || job.created_at)) - job.created_at,
+        ),
+      )
+    : 0;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy || !target.trim() || !selectedScanner?.available) return;
+    setPending(true);
+    setMessage(null);
+    setQuery("");
+    setStatusFilter("all");
+    setTab("findings");
+    try {
+      const { job_id } = await startScan(scanner, target.trim());
+      const detail = await fetchScan(job_id);
+      setJob(detail);
+      setNow(Date.now() / 1000);
+      setConnected(true);
+      localStorage.setItem("swot.lastScan", job_id);
+      if (isActive(detail.status)) follow(job_id);
+      await refresh();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setPending(false);
+    }
+  }
+  async function openScan(id: string) {
+    if (busy && id !== job?.job_id) {
+      setMessage(
+        "Finish or cancel the current scan before opening another one.",
+      );
+      return;
+    }
+    try {
+      const detail = await fetchScan(id);
+      stopRef.current?.();
+      generation.current++;
+      setJob(detail);
+      setTarget(detail.target);
+      setScanner(detail.scanner);
+      setView("scans");
+      setQuery("");
+      setStatusFilter("all");
+      setMessage(detail.error);
+      setConnected(true);
+      localStorage.setItem("swot.lastScan", id);
+      if (isActive(detail.status)) follow(id);
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  }
+  async function cancel() {
+    if (!job) return;
+    setCancelling(true);
+    try {
+      await cancelScan(job.job_id);
+    } catch (error) {
+      setMessage((error as Error).message);
+      setCancelling(false);
+    }
+  }
+  function exportResults(format: "csv" | "json") {
+    if (!job) return;
+    const body =
+      format === "csv"
+        ? toCsv(shape.columns, shape.source, filtered)
+        : JSON.stringify(
+            {
+              ...job,
+              finding_count: filtered.length,
+              total_finding_count: findings.length,
+              export_scope: "filtered_findings",
+              events: filtered,
+            },
+            null,
+            2,
+          );
+    download(
+      `swot-${job.scanner}-${job.job_id.slice(0, 8)}.${format}`,
+      body,
+      format === "csv" ? "text/csv;charset=utf-8" : "application/json",
+    );
+  }
+  async function exportRun(id: string) {
+    try {
+      const detail = await fetchScan(id);
+      download(
+        `swot-${id.slice(0, 8)}.json`,
+        JSON.stringify(detail, null, 2),
+        "application/json",
+      );
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  }
+  function choose(name: string) {
+    if (!busy) {
+      setScanner(name);
+      setView("scans");
+      setMessage(null);
     }
   }
 
-  async function onCancel() {
-    if (jobRef.current) await cancelScan(jobRef.current);
-  }
-
-  function onExport() {
-    if (!ran || !shape) return;
-    const isTable = shape.mode === "table";
-    const body = isTable
-      ? toCsv(shape.columns, shape.source, findings)
-      : JSON.stringify(findings.map((f) => f.data), null, 2);
-    const blob = new Blob([body], {
-      type: isTable ? "text/csv" : "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `swot-${ran.scanner}-${ran.target}.${isTable ? "csv" : "json"}`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  const duration = finishedAt && startedAt ? Math.max(1, Math.round(finishedAt - startedAt)) : null;
-
   return (
-    <>
-      <div className="main-head">
-        <div>
-          <h1>Scan workspace</h1>
-          <p>Discover and inspect your external attack surface.</p>
+    <div className="shell">
+      <Sidebar
+        view={view}
+        onChange={(v) => {
+          setView(v);
+          setQuery("");
+        }}
+        running={busy}
+      />
+      <main className="main">
+        <div className="breadcrumb">
+          Workspace <span>/</span>{" "}
+          {view === "tools"
+            ? "Engines"
+            : view === "history"
+              ? "History"
+              : view === "overview"
+                ? "Overview"
+                : "Scans"}
         </div>
-        <span className="pill">
-          <span className="dot" /> All systems operational
-        </span>
-      </div>
-
-      {/* New scan */}
-      <form className="card newscan" onSubmit={onSubmit}>
-        <div className="card-label">NEW SCAN</div>
-        <div className="scan-row">
-          <select
-            className="select"
-            aria-label="Scanner"
-            value={scanner}
-            onChange={(e) => setScanner(e.target.value)}
-            disabled={state === "running"}
+        <header className="main-head">
+          <div>
+            <h1>{headings[view][0]}</h1>
+            <p>{headings[view][1]}</p>
+          </div>
+          <span
+            className={`pill ${online === false ? "offline" : ""}`}
+            role="status"
           >
-            {scanners.map((s) => (
-              <option key={s.name} value={s.name}>
-                {s.title}
-              </option>
-            ))}
-          </select>
-          <input
-            className="input"
-            aria-label="Target"
-            placeholder="example.com"
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            disabled={state === "running"}
-          />
-          {state === "running" ? (
-            <button type="button" className="btn btn-danger" onClick={onCancel}>
-              Cancel
+            <span className="dot" />
+            {online === null
+              ? "Connecting to API"
+              : online
+                ? "API connected"
+                : "API offline"}
+          </span>
+        </header>
+        {message && (
+          <div className="notice" role="alert">
+            <IcAlert width={18} height={18} />
+            <span>{message}</span>
+            <button
+              onClick={() => setMessage(null)}
+              aria-label="Dismiss message"
+            >
+              ×
             </button>
-          ) : (
-            <button type="submit" className="btn">
-              Start scan <IcArrow width={16} height={16} />
-            </button>
-          )}
-        </div>
-        <div className="note">
-          <IcShield width={15} height={15} />
-          Authorized reconnaissance only. Ensure you have permission to scan the
-          target.
-        </div>
-      </form>
+          </div>
+        )}
 
-      {!ran ? (
-        <div className="card empty">
-          Run a scan to see findings, metrics and the activity log here.
-        </div>
-      ) : (
-        <>
-          {/* Summary */}
-          <div className="card summary">
-            <div className="summary-id">
-              <div className="summary-target">
-                {ran.target}
-                <StatusBadge state={state} />
+        {view === "scans" && (
+          <>
+            <form className="card newscan" onSubmit={submit}>
+              <div className="section-heading">
+                <span className="card-label">NEW SCAN</span>
+                <span className="tiny muted">01 / CONFIGURE TARGET</span>
               </div>
-              <div className="summary-meta">
+              <div className="scan-row">
+                <label className="field scanner-field">
+                  <span>Scan type</span>
+                  <select
+                    aria-label="Scanner"
+                    value={scanner}
+                    onChange={(e) => setScanner(e.target.value)}
+                    disabled={busy}
+                  >
+                    {!scanners.length && (
+                      <option value="dns_subdomains">Loading scanners…</option>
+                    )}
+                    {["workflow", "builtin", "external"].map((category) => (
+                      <optgroup
+                        key={category}
+                        label={
+                          category === "workflow"
+                            ? "Workflows"
+                            : category === "builtin"
+                              ? "Built-in scanners"
+                              : "External engines"
+                        }
+                      >
+                        {scanners
+                          .filter((s) => s.category === category)
+                          .map((s) => (
+                            <option
+                              key={s.name}
+                              value={s.name}
+                              disabled={!s.available}
+                            >
+                              {s.title}
+                              {!s.available ? " · not installed" : ""}
+                            </option>
+                          ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
+                <label className="field target-field">
+                  <span>Target domain or URL</span>
+                  <input
+                    aria-label="Target"
+                    placeholder="example.com"
+                    value={target}
+                    onChange={(e) => setTarget(e.target.value)}
+                    disabled={busy}
+                    required
+                    maxLength={255}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </label>
+                {busy ? (
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={cancel}
+                    disabled={pending || cancelling}
+                  >
+                    {pending
+                      ? "Starting…"
+                      : cancelling
+                        ? "Cancelling…"
+                        : "Cancel scan"}
+                  </button>
+                ) : (
+                  <button
+                    className="btn"
+                    type="submit"
+                    disabled={
+                      !target.trim() || !selectedScanner?.available || !online
+                    }
+                  >
+                    Start scan <IcArrow width={18} height={18} />
+                  </button>
+                )}
+              </div>
+              <div className="scan-caption">
                 <span>
-                  <IcCalendar width={14} height={14} />
-                  {new Date(startedAt * 1000).toLocaleString("en-GB", {
-                    day: "2-digit",
-                    month: "short",
-                    year: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+                  {selectedScanner?.description ??
+                    "Choose a scanner to start your investigation."}
                 </span>
                 <span>
-                  <IcClock width={14} height={14} />
-                  {duration ? `${duration}s` : state === "running" ? "running…" : "—"}
+                  <IcShield width={14} height={14} /> Authorized targets only
                 </span>
-                <span>{title}</span>
               </div>
+            </form>
+            <section className="card summary-card" aria-label="Scan summary">
+              <div className="summary-id">
+                <div className="summary-target">
+                  <h2>{job?.target ?? "Ready to explore"}</h2>
+                  {job ? (
+                    <StatusBadge status={job.status} />
+                  ) : (
+                    <span className="badge neutral">Idle</span>
+                  )}
+                </div>
+                <div className="summary-meta">
+                  <span>
+                    <IcCalendar width={14} height={14} />
+                    {job ? date(job.created_at) : "No scan selected"}
+                  </span>
+                  <span>
+                    <IcClock width={14} height={14} />
+                    {job ? `${elapsed}s` : "—"}
+                  </span>
+                </div>
+              </div>
+              <div className="tiles">
+                {tiles.map((tile) => (
+                  <div className="tile" key={tile.label}>
+                    <strong
+                      className={
+                        tile.alert && Number(tile.num) > 0 ? "danger-text" : ""
+                      }
+                    >
+                      {tile.num}
+                    </strong>
+                    <span>{tile.label}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+            {busy && (
+              <div className="progress-line" role="status">
+                <span className="dot pulse" />
+                {job?.status === "queued"
+                  ? "Waiting for an available worker"
+                  : String(progress?.data.stage ?? "Scan in progress")}
+                {progress && (
+                  <span>
+                    {String(progress.data.done)} / {String(progress.data.total)}
+                  </span>
+                )}
+                {!connected && (
+                  <span className="warning-text">
+                    Reconnecting to live results…
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="content">
+              <section className="card results-card">
+                <div className="tabs" role="tablist" aria-label="Scan results">
+                  <button
+                    role="tab"
+                    aria-selected={tab === "findings"}
+                    className={tab === "findings" ? "active" : ""}
+                    onClick={() => setTab("findings")}
+                  >
+                    Findings{" "}
+                    <span className="count-chip">{findings.length}</span>
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={tab === "technologies"}
+                    className={tab === "technologies" ? "active" : ""}
+                    onClick={() => setTab("technologies")}
+                  >
+                    Technologies{" "}
+                    <span className="count-chip">{technologies.length}</span>
+                  </button>
+                </div>
+                {tab === "findings" ? (
+                  <>
+                    <div className="toolbar">
+                      <label className="search">
+                        <IcSearch width={17} height={17} />
+                        <input
+                          aria-label="Search findings"
+                          placeholder="Search hosts, IPs or values…"
+                          value={query}
+                          onChange={(e) => setQuery(e.target.value)}
+                        />
+                      </label>
+                      <select
+                        className="compact-select"
+                        aria-label="Filter findings"
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                      >
+                        <option value="all">All results</option>
+                        <option value="success">HTTP 2xx / 3xx</option>
+                        <option value="restricted">HTTP 401 / 403</option>
+                        <option value="risk">High / critical</option>
+                      </select>
+                    </div>
+                    <div className="table-wrap">
+                      <table className="findings">
+                        <thead>
+                          <tr>
+                            {shape.columns.map((c) => (
+                              <th key={c.key}>{c.label}</th>
+                            ))}
+                            <th>Source</th>
+                            <th>
+                              <span className="sr-only">Details</span>
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filtered.map((row) => (
+                            <tr key={row.seq}>
+                              {shape.columns.map((c) => (
+                                <td
+                                  key={c.key}
+                                  className={c.mono ? "mono" : ""}
+                                >
+                                  {c.status ? (
+                                    <ValueBadge value={row.data[c.key]} />
+                                  ) : (
+                                    <span
+                                      className="cell-text"
+                                      title={display(row.data[c.key])}
+                                    >
+                                      {c.key === "_summary"
+                                        ? summary(row.data)
+                                        : display(row.data[c.key])}
+                                    </span>
+                                  )}
+                                </td>
+                              ))}
+                              <td className="muted">
+                                {display(row.data.source ?? shape.source)}
+                              </td>
+                              <td>
+                                <button
+                                  className="icon-button"
+                                  aria-label={`Details for ${summary(row.data)}`}
+                                  onClick={() => setSelected(row)}
+                                >
+                                  <IcExternal width={16} height={16} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {!filtered.length && (
+                      <Empty
+                        title={
+                          !job
+                            ? "Your next discovery starts here"
+                            : findings.length
+                              ? "No matching findings"
+                              : busy
+                                ? "Looking for signals…"
+                                : "No findings returned"
+                        }
+                        text={
+                          !job
+                            ? "Enter a target above. Findings will appear here as they arrive."
+                            : findings.length
+                              ? "Try another search or filter."
+                              : busy
+                                ? "Results stream live from the selected scanner."
+                                : "Review the activity log for scan coverage and errors."
+                        }
+                      />
+                    )}
+                    <div className="results-foot">
+                      <span>
+                        {filtered.length} of {findings.length} observations
+                      </span>
+                      <div>
+                        <button
+                          className="text-button"
+                          disabled={!filtered.length}
+                          onClick={() => exportResults("csv")}
+                        >
+                          <IcDownload width={14} height={14} />
+                          CSV
+                        </button>
+                        <button
+                          className="text-button"
+                          disabled={!filtered.length}
+                          onClick={() => exportResults("json")}
+                        >
+                          JSON
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="technology-list">
+                    {technologies.length ? (
+                      technologies.map((tech) => (
+                        <div className="technology" key={tech}>
+                          <span className="tech-icon">
+                            {tech.slice(0, 1).toUpperCase()}
+                          </span>
+                          <div>
+                            {tech}
+                            <small>Detected in scan responses</small>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <Empty
+                        title="No technologies detected"
+                        text="Run HTTP Fingerprint, httpx or the discovery workflow to identify technologies."
+                      />
+                    )}
+                  </div>
+                )}
+              </section>
+              <aside className="card activity">
+                <div className="section-heading">
+                  <h2>Activity log</h2>
+                  <span className="tiny muted">{busy ? "LIVE" : "EVENTS"}</span>
+                </div>
+                <div className="log-list" aria-label="Scan activity">
+                  {activity.map((event) => (
+                    <LogLine key={event.seq} event={event} />
+                  ))}
+                  {!activity.length && (
+                    <div className="log-placeholder">
+                      <span className="terminal-symbol">&gt;_</span>
+                      <p>Standing by</p>
+                      <small>Scan activity will appear here.</small>
+                    </div>
+                  )}
+                </div>
+              </aside>
             </div>
-            <div className="tiles">
-              {tiles.map((t) => (
-                <div className="tile" key={t.label}>
-                  <div className={`tile-num${t.alert ? " alert" : ""}`}>{t.num}</div>
-                  <div className="tile-label">{t.label}</div>
+          </>
+        )}
+
+        {view === "overview" && (
+          <>
+            <div className="overview-tiles">
+              {[
+                { num: history.length, label: "Recent scans" },
+                {
+                  num: history.filter((s) => s.status === "done").length,
+                  label: "Completed",
+                },
+                {
+                  num: history.reduce((n, s) => n + s.finding_count, 0),
+                  label: "Saved observations",
+                },
+                {
+                  num: scanners.filter((s) => s.available).length,
+                  label: "Available scanners",
+                },
+              ].map((t) => (
+                <div className="card overview-tile" key={t.label}>
+                  <span>{t.label}</span>
+                  <strong>{t.num}</strong>
                 </div>
               ))}
             </div>
-          </div>
-
-          {/* Content: findings + activity */}
-          <div className="content">
-            <div className="card">
-              <div className="tabs">
-                <span className="tab active">
-                  Findings <span className="count-chip">{findings.length}</span>
-                </span>
-              </div>
-
-              <div className="toolbar">
-                <label className="search">
-                  <IcSearch />
-                  <input
-                    placeholder="Search hosts, IPs or values…"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                  />
-                </label>
+            <div className="section-heading spaced">
+              <h2>Start an investigation</h2>
+              <span className="muted tiny">CHOOSE YOUR WORKFLOW</span>
+            </div>
+            <div className="quick-grid">
+              {[
+                {
+                  name: "discovery",
+                  title: "Map a domain",
+                  text: "Discover subdomains, resolve DNS and identify web services.",
+                  tag: "SUBFINDER → DNSX → HTTPX",
+                },
+                {
+                  name: "http_fingerprint",
+                  title: "Inspect a website",
+                  text: "Identify technologies, response headers and page information.",
+                  tag: "BUILT-IN · NO INSTALL REQUIRED",
+                },
+                {
+                  name: "nuclei",
+                  title: "Check configuration",
+                  text: "Run the bundled, read-only HTTP configuration checks.",
+                  tag: "NUCLEI · CURATED TEMPLATES",
+                },
+              ].map((item) => (
                 <button
-                  className="btn btn-ghost"
-                  onClick={onExport}
-                  disabled={findings.length === 0}
+                  className="card quick-card"
+                  key={item.name}
+                  onClick={() => choose(item.name)}
+                  disabled={busy}
                 >
-                  <IcDownload width={15} height={15} /> Export
-                </button>
-              </div>
-
-              {shape?.mode === "table" ? (
-                <FindingsTable columns={shape.columns} source={shape.source} rows={filtered} />
-              ) : (
-                <FindingsDetail rows={filtered} />
-              )}
-            </div>
-
-            <div className="card activity">
-              <div className="card-label">ACTIVITY LOG</div>
-              <div className="log-list">
-                {activity.map((e) => (
-                  <LogLine key={e.seq} event={e} />
-                ))}
-                {activity.length === 0 && <div className="empty">Waiting…</div>}
-              </div>
-            </div>
-          </div>
-
-          <div className="foot">
-            <span>{findings.length} findings discovered</span>
-            <span>SWOT — Smart Website OSINT Tool</span>
-          </div>
-        </>
-      )}
-    </>
-  );
-}
-
-function StatusBadge({ state }: { state: RunState }) {
-  if (state === "running")
-    return <span className="badge badge-run"><Spinner /> Scanning</span>;
-  if (state === "done")
-    return <span className="badge badge-ok"><IcCheck width={13} height={13} /> Completed</span>;
-  if (state === "cancelled")
-    return <span className="badge badge-run">Cancelled</span>;
-  return <span className="badge badge-err"><IcAlert width={13} height={13} /> Error</span>;
-}
-
-function Spinner() {
-  return (
-    <svg className="spin" width={13} height={13} viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth={3} strokeLinecap="round">
-      <path d="M12 3a9 9 0 1 0 9 9" />
-    </svg>
-  );
-}
-
-function FindingsTable({
-  columns,
-  source,
-  rows,
-}: {
-  columns: Column[];
-  source: string;
-  rows: ScanEvent[];
-}) {
-  if (rows.length === 0) return <div className="empty">No findings yet.</div>;
-  return (
-    <table className="findings">
-      <thead>
-        <tr>
-          {columns.map((c) => (
-            <th key={c.key}>{c.label}</th>
-          ))}
-          <th>Source</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.seq}>
-            {columns.map((c) => (
-              <td key={c.key} className={c.mono && !c.status ? "mono" : undefined}>
-                {c.status ? (
-                  <span className={`status-badge ${statusClass(r.data[c.key])}`}>
-                    {String(r.data[c.key])}
+                  <IcSearch width={22} height={22} />
+                  <h3>{item.title}</h3>
+                  <p>{item.text}</p>
+                  <span>
+                    {item.tag} <IcArrow width={16} height={16} />
                   </span>
-                ) : (
-                  cell(r.data[c.key])
-                )}
-              </td>
-            ))}
-            <td className="mono">{source}</td>
-            <td>
-              <a className="row-link" title="raw finding">
-                <IcExternal width={15} height={15} />
-              </a>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function cell(value: unknown): string {
-  if (Array.isArray(value)) return value.join(", ");
-  return String(value ?? "—");
-}
-
-function FindingsDetail({ rows }: { rows: ScanEvent[] }) {
-  if (rows.length === 0) return <div className="empty">No findings yet.</div>;
-  return (
-    <>
-      {rows.map((r) => (
-        <dl className="detail" key={r.seq}>
-          {Object.entries(r.data).map(([k, v]) => (
-            <div className="detail-row" key={k}>
-              <dt>{k.replace(/_/g, " ")}</dt>
-              <dd>{renderValue(v)}</dd>
+                </button>
+              ))}
             </div>
-          ))}
-        </dl>
-      ))}
-    </>
+            <div className="section-heading spaced">
+              <h2>Recent activity</h2>
+              <button
+                className="text-button"
+                onClick={() => setView("history")}
+              >
+                View history <IcArrow width={16} height={16} />
+              </button>
+            </div>
+            <HistoryTable
+              rows={history.slice(0, 5)}
+              open={openScan}
+              exportRun={exportRun}
+            />
+          </>
+        )}
+        {view === "history" && (
+          <>
+            <div className="history-toolbar">
+              <label className="search">
+                <IcSearch width={17} height={17} />
+                <input
+                  aria-label="Search scan history"
+                  placeholder="Search by target or scanner…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </label>
+              <button
+                className="btn btn-ghost"
+                onClick={() => refresh().catch((e) => setMessage(e.message))}
+              >
+                Refresh
+              </button>
+            </div>
+            <HistoryTable
+              rows={history.filter((s) =>
+                `${s.target} ${s.scanner}`
+                  .toLowerCase()
+                  .includes(query.toLowerCase()),
+              )}
+              open={openScan}
+              exportRun={exportRun}
+            />
+            <p className="muted tiny">
+              Latest 100 scans · Saved locally in your workspace database
+            </p>
+          </>
+        )}
+        {view === "tools" && (
+          <>
+            <div className="tools-intro card">
+              <IcSettings width={24} height={24} />
+              <div>
+                <h2>Your scanning toolkit</h2>
+                <p>
+                  Built-in scanners are always available. The Docker image
+                  includes all seven ProjectDiscovery engines. ZAP is an
+                  optional Compose profile.
+                </p>
+              </div>
+              <button
+                className="btn btn-ghost"
+                onClick={() => refresh().catch((e) => setMessage(e.message))}
+              >
+                Refresh status
+              </button>
+            </div>
+            <div className="tools-grid">
+              {tools.map((tool) => (
+                <article className="card tool-card" key={tool.name}>
+                  <div className="section-heading">
+                    <span className="tool-name">{tool.title}</span>
+                    <span
+                      className={`badge ${tool.available ? "success" : "neutral"}`}
+                    >
+                      {tool.available ? "Ready" : "Not installed"}
+                    </span>
+                  </div>
+                  <p>{tool.description}</p>
+                  <div className="tool-meta">
+                    <span className="mono tiny">
+                      {tool.version ??
+                        (tool.available ? "Available" : "Enable in Docker")}
+                    </span>
+                    <a
+                      className="text-button"
+                      href={tool.docs}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Docs <IcExternal width={13} height={13} />
+                    </a>
+                  </div>
+                  <button
+                    className="btn btn-ghost"
+                    disabled={!tool.available || busy}
+                    onClick={() => choose(tool.name)}
+                  >
+                    Use {tool.title}
+                    <IcArrow width={14} height={14} />
+                  </button>
+                </article>
+              ))}
+            </div>
+          </>
+        )}
+        <footer className="foot">
+          <span>
+            <span className="dot" /> Local workspace
+          </span>
+          <span>
+            SWOT <span className="muted">/</span> Smart Website OSINT Tool
+          </span>
+        </footer>
+      </main>
+      {selected && (
+        <FindingDialog event={selected} onClose={() => setSelected(null)} />
+      )}
+    </div>
   );
 }
 
-function renderValue(v: unknown) {
-  if (Array.isArray(v)) {
-    if (v.length === 0) return <span className="mono">—</span>;
-    return (
-      <div className="chips">
-        {v.map((item, i) => (
-          <span className="chip" key={i}>
-            {String(item)}
-          </span>
-        ))}
+function Empty({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="empty">
+      <div className="radar" aria-hidden="true">
+        <div />
+        <IcSearch width={24} height={24} />
       </div>
-    );
-  }
-  if (v && typeof v === "object") {
-    return (
-      <div className="chips">
-        {Object.entries(v as Record<string, unknown>).map(([k, val]) => (
-          <span className="chip" key={k}>
-            {k}: {Array.isArray(val) ? val.join(" · ") : String(val)}
-          </span>
-        ))}
-      </div>
-    );
-  }
-  return <span>{String(v ?? "—")}</span>;
+      <h3>{title}</h3>
+      <p>{text}</p>
+    </div>
+  );
 }
-
+function StatusBadge({ status }: { status: RunState }) {
+  return (
+    <span
+      className={`badge ${status === "done" ? "success" : status === "error" ? "danger" : isActive(status) ? "warning" : "neutral"}`}
+    >
+      {status === "done" ? (
+        <IcCheck width={13} height={13} />
+      ) : isActive(status) ? (
+        <span className="dot pulse" />
+      ) : null}
+      {
+        {
+          done: "Completed",
+          running: "Scanning",
+          queued: "Queued",
+          cancelled: "Cancelled",
+          error: "Failed",
+        }[status]
+      }
+    </span>
+  );
+}
+function ValueBadge({ value }: { value: unknown }) {
+  if (value === undefined || value === null)
+    return <span className="muted">—</span>;
+  const n = Number(value);
+  const color =
+    ["critical", "high"].includes(String(value)) || n >= 500
+      ? "danger"
+      : n >= 400 || value === "medium"
+        ? "warning"
+        : (n >= 200 && n < 300) || value === "open"
+          ? "success"
+          : "neutral";
+  return <span className={`value-badge ${color}`}>{String(value)}</span>;
+}
 function LogLine({ event }: { event: ScanEvent }) {
   const level = String(event.data.level ?? "info");
-  let msg: string;
-  if (event.kind === "progress") msg = `progress ${event.data.done}/${event.data.total}`;
-  else if (event.kind === "status") msg = `scan ${event.data.status}`;
-  else msg = String(event.data.message ?? "");
+  const text =
+    event.kind === "status"
+      ? `Scan ${event.data.status}`
+      : event.kind === "progress"
+        ? `${event.data.stage ?? "Progress"}: ${event.data.done}/${event.data.total}`
+        : String(event.data.message ?? "");
   return (
     <div className="log-item">
-      <span className="log-time">{hhmmss(event.at)}</span>
-      <IcCheck className={`log-ic ${level}`} />
-      <span className="log-msg">{msg}</span>
+      <time>{new Date(event.at * 1000).toLocaleTimeString("en-GB")}</time>
+      {level === "error" || level === "warn" ? (
+        <IcAlert
+          className={level === "error" ? "danger-text" : "warning-text"}
+          width={15}
+          height={15}
+        />
+      ) : (
+        <IcCheck width={15} height={15} />
+      )}
+      <span>{text}</span>
     </div>
+  );
+}
+function HistoryTable({
+  rows,
+  open,
+  exportRun,
+}: {
+  rows: ScanSummary[];
+  open: (id: string) => void;
+  exportRun: (id: string) => void;
+}) {
+  return (
+    <section className="card results-card">
+      <div className="table-wrap">
+        <table className="findings history-table">
+          <thead>
+            <tr>
+              <th>Target</th>
+              <th>Scanner</th>
+              <th>Status</th>
+              <th>Findings</th>
+              <th>Started</th>
+              <th>Report</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((run) => (
+              <tr key={run.job_id}>
+                <td>
+                  <button
+                    className="target-link"
+                    onClick={() => open(run.job_id)}
+                  >
+                    {run.target}
+                  </button>
+                </td>
+                <td className="muted">{run.scanner.replace(/_/g, " ")}</td>
+                <td>
+                  <StatusBadge status={run.status} />
+                </td>
+                <td className="mono">{run.finding_count}</td>
+                <td className="muted">{date(run.created_at)}</td>
+                <td>
+                  <button
+                    className="icon-button"
+                    aria-label={`Export scan ${run.job_id}`}
+                    onClick={() => exportRun(run.job_id)}
+                  >
+                    <IcDownload width={17} height={17} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!rows.length && (
+        <Empty
+          title="A clean slate"
+          text="Your saved scans will appear here. Start an investigation to build your history."
+        />
+      )}
+    </section>
+  );
+}
+function FindingDialog({
+  event,
+  onClose,
+}: {
+  event: ScanEvent;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
+  return (
+    <dialog
+      className="finding-dialog"
+      ref={ref}
+      onClose={onClose}
+      aria-labelledby="finding-title"
+    >
+      <div className="section-heading">
+        <div>
+          <span className="card-label">FINDING DETAILS</span>
+          <h2 id="finding-title">{summary(event.data)}</h2>
+        </div>
+        <button
+          className="icon-button close-button"
+          aria-label="Close finding"
+          onClick={onClose}
+        >
+          ×
+        </button>
+      </div>
+      <p className="muted tiny">
+        Observed {date(event.at)} · Event #{event.seq}
+      </p>
+      <dl className="detail">
+        {Object.entries(event.data).map(([key, value]) => (
+          <div key={key}>
+            <dt>{key.replace(/_/g, " ")}</dt>
+            <dd>
+              {typeof value === "object" && value !== null ? (
+                <pre>{JSON.stringify(value, null, 2)}</pre>
+              ) : (
+                display(value)
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <button
+        className="btn btn-ghost"
+        onClick={() =>
+          download(
+            `swot-finding-${event.seq}.json`,
+            JSON.stringify(event.data, null, 2),
+            "application/json",
+          )
+        }
+      >
+        <IcDownload width={16} height={16} />
+        Export evidence
+      </button>
+    </dialog>
   );
 }

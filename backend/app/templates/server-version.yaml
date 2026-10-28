@@ -1,0 +1,20 @@
+id: swot-server-version-disclosure
+info:
+  name: Server version disclosed in HTTP headers
+  author: swot
+  severity: info
+  description: The Server header exposes a software version. Verify the product and patch status before drawing vulnerability conclusions.
+  tags: headers,tech
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    redirects: false
+    matchers:
+      - type: regex
+        part: header
+        regex:
+          - '(?im)^server:.*[0-9]+\.[0-9]+'
+    extractors:
+      - type: kval
+        kval: [server]

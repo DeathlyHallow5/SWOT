@@ -1,0 +1,21 @@
+id: swot-missing-content-type-options
+info:
+  name: Missing X-Content-Type-Options header
+  author: swot
+  severity: info
+  description: The response does not declare X-Content-Type-Options. Review whether nosniff is appropriate for this resource.
+  tags: headers,config
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    redirects: false
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: header
+        words: ["x-content-type-options:"]
+        case-insensitive: true
+        negative: true
