@@ -15,6 +15,7 @@ from .config import settings
 from .jobs import manager
 from .scanners._scope import in_scope, public_target
 from .scanners._intel import provider_catalog
+from .scanners import nuclei_config
 
 
 @asynccontextmanager
@@ -32,6 +33,8 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
 class ScanRequest(BaseModel):
     scanner: str = Field(..., min_length=1, max_length=64)
     target: str = Field(..., min_length=1, max_length=255)
+    # Scanner-specific options (currently nuclei: {"source": ..., "profile": ...}).
+    options: dict[str, str] = Field(default_factory=dict)
 
 
 @app.get("/api/health")
@@ -49,6 +52,11 @@ async def list_tools() -> list[dict]:
 async def list_scanners() -> list[dict]:
     engines = await tools.catalog()
     return scanners.catalog({engine["name"]: engine["available"] for engine in engines})
+
+
+@app.get("/api/nuclei/options")
+async def nuclei_options() -> dict:
+    return {"sources": nuclei_config.sources(), "profiles": nuclei_config.profiles()}
 
 
 @app.get("/api/scans")
@@ -74,10 +82,26 @@ async def start_scan(req: ScanRequest) -> dict:
         if missing:
             raise HTTPException(503, "Unavailable engines: " + ", ".join(missing) + ". Check Tools & engines or start Docker Compose.")
 
+    runner = scanner.run
+    if scanner.name == "nuclei":
+        source = req.options.get("source", "bundled")
+        profile = req.options.get("profile", "safe")
+        try:
+            nuclei_config.resolve_source(source)  # validate availability early
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if profile not in {p["id"] for p in nuclei_config.profiles()}:
+            raise HTTPException(422, f"Unknown scan profile: {profile}")
+        nuclei_runner = nuclei_config.make_runner(source, profile)
+
+        async def runner(job):  # noqa: F811 - nuclei-specific runner
+            await public_target(job.target)
+            await nuclei_runner(job)
+
     async def guarded_runner(job):
         if scanner.category == "builtin" and scanner.name not in ("dns_subdomains", "whois", "wayback"):
             await public_target(target)
-        await scanner.run(job)
+        await runner(job)
 
     try:
         job = await manager.submit(scanner.name, target, guarded_runner)

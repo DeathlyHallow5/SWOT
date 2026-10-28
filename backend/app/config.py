@@ -46,5 +46,14 @@ class Settings:
     # Per-scanner cap on intel HTTP lookups, to stay within free-tier limits.
     max_intel_lookups: int = int(os.getenv("SWOT_MAX_INTEL_LOOKUPS", "60"))
 
+    # Nuclei template sources. "bundled" (the reviewed templates shipped in
+    # backend/app/templates) is always available; the official set and any
+    # user presets are optional and selected per scan.
+    nuclei_templates_dir: str = os.getenv("SWOT_NUCLEI_TEMPLATES", str(Path(__file__).resolve().parents[2] / "tools/nuclei-templates"))
+    nuclei_presets_dir: str = os.getenv("SWOT_NUCLEI_PRESETS", str(Path(__file__).resolve().parents[1] / "data/nuclei-presets"))
+    # DoS templates can disrupt a target; excluded from every profile unless
+    # explicitly allowed here.
+    nuclei_allow_dos: bool = os.getenv("SWOT_NUCLEI_ALLOW_DOS", "").lower() in ("1", "true", "yes")
+
 
 settings = Settings()

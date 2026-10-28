@@ -124,12 +124,34 @@ used — no HTML scraping and no CAPTCHA handling. Use them only against targets
 you are authorized to assess; stealer-log and breach checks are for reviewing
 your own exposure.
 
-Nuclei does **not** run the entire community CVE collection by default. The
-bundled templates live in `backend/app/templates`, are validated against the
-pinned engine, and do not automatically update. Add reviewed templates there
-and rebuild to expand coverage. Findings retain template IDs and evidence;
-missing headers, HTTP 403, a software banner or an HTTP 200 on a suspicious path
-are not automatically labelled confirmed critical vulnerabilities.
+### Nuclei template sources and scan profiles
+
+Each Nuclei scan chooses a **template source** and a **scan profile**:
+
+- **Bundled (reviewed)** — the curated HTTP checks in `backend/app/templates`;
+  always available and fully offline.
+- **Official nuclei-templates** — the full ProjectDiscovery collection,
+  installed at a pinned tag with `python scripts/install_nuclei_templates.py`
+  (into `tools/nuclei-templates`, Git-ignored). Appears as available once
+  installed.
+- **User presets** — drop a folder of your own templates under
+  `backend/data/nuclei-presets/<name>`; each folder becomes a selectable source
+  (`SWOT_NUCLEI_PRESETS` changes the location).
+
+Profiles bound how hard a scan looks:
+
+| Profile | Severities | Intrusive tags |
+| --- | --- | --- |
+| Safe | info, low | excluded |
+| Standard | medium, high, critical | excluded |
+| Full (opt-in) | all | included, except DoS |
+
+`fuzzing`, `brute-force` and `intrusive` tags are excluded from the Safe and
+Standard profiles; **DoS templates are excluded from every profile** unless
+`SWOT_NUCLEI_ALLOW_DOS=1` is set deliberately. Findings retain template IDs and
+evidence; missing headers, HTTP 403, a software banner or an HTTP 200 on a
+suspicious path are not automatically labelled confirmed critical
+vulnerabilities. Only scan targets you are authorized to assess.
 
 External engines use a bounded rate, timeouts and argument-list execution
 (without a shell). Cancellation terminates their child process. Discovery

@@ -18,11 +18,13 @@ import {
   cancelScan,
   fetchHealth,
   fetchHistory,
+  fetchNucleiOptions,
   fetchScan,
   fetchScanners,
   fetchTools,
   startScan,
   streamScan,
+  type NucleiOptions,
   type RunState,
   type ScanDetail,
   type ScanEvent,
@@ -71,6 +73,9 @@ export default function Workspace() {
   const [history, setHistory] = useState<ScanSummary[]>([]);
   const [scanner, setScanner] = useState("dns_subdomains");
   const [target, setTarget] = useState("");
+  const [nuclei, setNuclei] = useState<NucleiOptions | null>(null);
+  const [nucleiSource, setNucleiSource] = useState("bundled");
+  const [nucleiProfile, setNucleiProfile] = useState("safe");
   const [job, setJob] = useState<ScanDetail | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [connected, setConnected] = useState(true);
@@ -206,6 +211,13 @@ export default function Workspace() {
     return () => clearInterval(timer);
   }, [busy]);
 
+  useEffect(() => {
+    if (scanner !== "nuclei" || nuclei) return;
+    fetchNucleiOptions()
+      .then(setNuclei)
+      .catch(() => setNuclei(null));
+  }, [scanner, nuclei]);
+
   const findings = useMemo(
     () => job?.events.filter((e) => e.kind === "finding") ?? [],
     [job],
@@ -271,7 +283,11 @@ export default function Workspace() {
     setStatusFilter("all");
     setTab("findings");
     try {
-      const { job_id } = await startScan(scanner, target.trim());
+      const options =
+        scanner === "nuclei"
+          ? { source: nucleiSource, profile: nucleiProfile }
+          : undefined;
+      const { job_id } = await startScan(scanner, target.trim(), options);
       const detail = await fetchScan(job_id);
       setJob(detail);
       setNow(Date.now() / 1000);
@@ -500,6 +516,45 @@ export default function Workspace() {
                   </button>
                 )}
               </div>
+              {scanner === "nuclei" && (
+                <div className="scan-row nuclei-row">
+                  <label className="field">
+                    <span>Template source</span>
+                    <select
+                      aria-label="Nuclei template source"
+                      value={nucleiSource}
+                      onChange={(e) => setNucleiSource(e.target.value)}
+                      disabled={busy}
+                    >
+                      {(nuclei?.sources ?? []).map((s) => (
+                        <option
+                          key={s.id}
+                          value={s.id}
+                          disabled={s.available === false}
+                        >
+                          {s.title}
+                          {s.available === false ? " · not installed" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Scan profile</span>
+                    <select
+                      aria-label="Nuclei scan profile"
+                      value={nucleiProfile}
+                      onChange={(e) => setNucleiProfile(e.target.value)}
+                      disabled={busy}
+                    >
+                      {(nuclei?.profiles ?? []).map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
               <div className="scan-caption">
                 <span>
                   {selectedScanner?.description ??

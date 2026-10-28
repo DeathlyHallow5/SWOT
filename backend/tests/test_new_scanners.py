@@ -1,7 +1,9 @@
 """Offline unit tests for the new scanners and their helpers (no network)."""
 import asyncio
 
-from app.scanners import _dns, _intel, dork_search
+import pytest
+
+from app.scanners import _dns, _intel, dork_search, nuclei_config
 from app.scanners.subdomain_takeover import _service_for
 from app.scanners.tech_stack import _ASSET_LIB
 
@@ -50,6 +52,32 @@ def test_dns_name_roundtrip() -> None:
     encoded = _dns._encode("sub.example.com")
     name, end = _dns._read_name(encoded, 0)
     assert name == "sub.example.com" and end == len(encoded)
+
+
+def test_nuclei_sources_and_profiles() -> None:
+    ids = {s["id"] for s in nuclei_config.sources()}
+    assert "bundled" in ids and "official" in ids
+    assert [s for s in nuclei_config.sources() if s["id"] == "bundled"][0]["available"]
+    profiles = {p["id"] for p in nuclei_config.profiles()}
+    assert profiles == {"safe", "standard", "full"}
+
+
+def test_nuclei_args_apply_profile_and_exclude_intrusive() -> None:
+    safe = nuclei_config.build_args("https://example.com", "bundled", "safe")
+    assert "-severity" in safe and safe[safe.index("-severity") + 1] == "info,low"
+    tags = safe[safe.index("-etags") + 1]
+    assert "fuzzing" in tags and "dos" in tags  # intrusive + dos excluded
+    # Full profile has no severity restriction but still excludes dos by default.
+    full = nuclei_config.build_args("https://example.com", "bundled", "full")
+    assert "-severity" not in full
+    assert "dos" in full[full.index("-etags") + 1]
+
+
+def test_nuclei_rejects_unknown_profile_and_source() -> None:
+    with pytest.raises(ValueError):
+        nuclei_config.build_args("https://example.com", "bundled", "nope")
+    with pytest.raises(ValueError):
+        nuclei_config.resolve_source("preset:does-not-exist")
 
 
 def test_dork_search_generates_queries_offline() -> None:

@@ -60,12 +60,29 @@ export const fetchScan = (id: string) =>
 export const fetchHealth = () => request<{ status: string }>("/health");
 export const cancelScan = (id: string) =>
   request(`/scans/${encodeURIComponent(id)}/cancel`, { method: "POST" });
-export const startScan = (scanner: string, target: string) =>
+export const startScan = (
+  scanner: string,
+  target: string,
+  options?: Record<string, string>,
+) =>
   request<{ job_id: string }>("/scans", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scanner, target }),
+    body: JSON.stringify({ scanner, target, options: options ?? {} }),
   });
+
+export interface NucleiOption {
+  id: string;
+  title: string;
+  available?: boolean;
+  description?: string;
+}
+export interface NucleiOptions {
+  sources: NucleiOption[];
+  profiles: NucleiOption[];
+}
+export const fetchNucleiOptions = () =>
+  request<NucleiOptions>("/nuclei/options");
 
 // EventSource reconnects automatically. The server resumes using Last-Event-ID.
 export function streamScan(
